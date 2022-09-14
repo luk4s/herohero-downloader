@@ -4,6 +4,7 @@ import os
 import requests
 import sys
 import xml.etree.ElementTree as ET
+from mutagen.mp4 import MP4
 
 # USAGE: herohero-downloader.py <https://herohero.co/services/functions/rss-feed>
 
@@ -31,16 +32,52 @@ def download_file(filename, url):
           f.write(chunk)
   f.close()
 
-n = 1
-items = root_node.findall(".//item")
-list.reverse(items)
-for item in items:
-  id = item.find("guid").text
+  return destination
+
+def write_metadata(filename, data):
+  tags = MP4(filename).tags
+  tags['\xa9ART'] = data["artist"]
+  tags['\xa9alb'] = data["album"]
+  tags['desc'] = data["description"]
+  tags['\xa9nam'] = data["title"]
+  tags['trkn'] = [(data["number"], data["tracks"])]
+  tags['purl'] = data["link"]
+  tags['egid'] = data["guid"]
+  tags['pcst'] = True # Podcast = True
+  tags.save(filename)
+  return filename
+
+def meta_atributes(item):
+  data = {}
   pubDate = item.find("pubDate").text
   released_date = datetime.strptime(pubDate, "%a, %d %b %Y %H:%M:%S %Z")
-  url = item.find("enclosure").attrib["url"]
   title = item.find("description").text.splitlines()[0].strip().split(".")[0]
+
+  data["date"] = released_date
+  data["title"] = title
+  data["description"] = item.find("description").text
+  data["guid"] = item.find("guid").text
+
+  return data
+
+
+items = root_node.findall(".//item")
+list.reverse(items)
+general_metadata = { 
+  "tracks": len(items), 
+  "album": download_dir, 
+  "artist": "Bára",  # TODO: 
+  "link": root_node.find(".//link").text
+  }
+n = 1
+for item in items:
+  id = item.find("guid").text
+  data = meta_atributes(item)
+  data["number"] = n
+  url = item.find("enclosure").attrib["url"]
   ext = url.split(".")[-1]
-  filename = f"{n:03d} - {title} ({released_date.strftime('%F')}).{ext}"
-  download_file(filename, url)
+  filename = f"{data['date'].strftime('%F')} {n:03d} - {data['title']}.{ext}"
+  file = download_file(filename, url)
+  if file:
+    write_metadata(file, data | general_metadata)
   n += 1
