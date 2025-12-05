@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
+# USAGE: herohero-downloader.py <https://svc-prod-na.herohero.co/rss-feed/blabla>
 from datetime import datetime
 import os
 import requests
 import sys
 import xml.etree.ElementTree as ET
-from mutagen.mp4 import MP4
+import re
 
-# USAGE: herohero-downloader.py <https://herohero.co/services/functions/rss-feed>
+def sanitize_filename(filename):
+    return re.sub(r'[\\/*?:"<>|]', '_', filename)
 
 feed_uri = sys.argv[1]
-if not feed_uri.startswith("https://herohero.co"):
-  raise "HeroHero feed URI required"
 
 response = requests.get(feed_uri)
 root_node = ET.fromstring(response.content)
@@ -22,36 +22,28 @@ if not os.path.exists(download_dir):
 def download_file(filename, url):
   destination = f"./{download_dir}/{filename}"
   if os.path.exists(destination):
-    return
+    return destination
 
-  print(f"Downloading {filename}...")
-  response = requests.get(url)
-  f = open(destination, 'wb')
-  for chunk in response.iter_content(chunk_size=512 * 1024): 
-      if chunk: # filter out keep-alive new chunks
-          f.write(chunk)
-  f.close()
+  response = requests.get(url, stream=True)
+  total_size = int(response.headers.get('content-length', 0))
+  downloaded = 0
+
+  with open(destination, 'wb') as f:
+    for chunk in response.iter_content(chunk_size=1024 * 1024):
+      if chunk:
+        f.write(chunk)
+        downloaded += len(chunk)
+        percent = int(100 * downloaded / total_size) if total_size > 0 else 0
+        sys.stdout.write(f"\r{percent}% downloaded ({downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB)")
+        sys.stdout.flush()
 
   return destination
-
-def write_metadata(filename, data):
-  tags = MP4(filename).tags
-  tags['\xa9ART'] = data["artist"]
-  tags['\xa9alb'] = data["album"]
-  tags['desc'] = data["description"]
-  tags['\xa9nam'] = data["title"]
-  tags['trkn'] = [(data["number"], data["tracks"])]
-  tags['purl'] = data["link"]
-  tags['egid'] = data["guid"]
-  tags['pcst'] = True # Podcast = True
-  tags.save(filename)
-  return filename
 
 def meta_atributes(item):
   data = {}
   pubDate = item.find("pubDate").text
   released_date = datetime.strptime(pubDate, "%a, %d %b %Y %H:%M:%S %Z")
-  title = item.find("description").text.splitlines()[0].strip().split(".")[0]
+  title = item.find("title").text.strip()
 
   data["date"] = released_date
   data["title"] = title
@@ -63,21 +55,18 @@ def meta_atributes(item):
 
 items = root_node.findall(".//item")
 list.reverse(items)
-general_metadata = { 
-  "tracks": len(items), 
-  "album": download_dir, 
-  "artist": "Bára",  # TODO: 
-  "link": root_node.find(".//link").text
-  }
+
 n = 1
 for item in items:
-  id = item.find("guid").text
-  data = meta_atributes(item)
-  data["number"] = n
-  url = item.find("enclosure").attrib["url"]
-  ext = url.split(".")[-1]
-  filename = f"{data['date'].strftime('%F')} {n:03d} - {data['title']}.{ext}"
-  file = download_file(filename, url)
-  if file:
-    write_metadata(file, data | general_metadata)
-  n += 1
+    id = item.find("guid").text
+    data = meta_atributes(item)
+    data["number"] = n
+    url = item.find("enclosure").attrib["url"]
+    ext = url.split(".")[-1]
+
+    raw_filename = f"{data['date'].strftime('%F')} {n:03d} - {data['title']}.{ext}"
+    filename = sanitize_filename(raw_filename)
+
+    file = download_file(filename, url)
+
+    n += 1
