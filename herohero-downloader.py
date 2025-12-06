@@ -1,72 +1,176 @@
 #!/usr/bin/env python3
-# USAGE: herohero-downloader.py <https://svc-prod-na.herohero.co/rss-feed/blabla>
-from datetime import datetime
-import os
-import requests
+"""
+Usage:
+    herohero-downloader.py <rss_feed_url>
+
+Requirements:
+    pip install aiohttp tqdm requests
+"""
+
+import asyncio
+import aiohttp
+import json
 import sys
-import xml.etree.ElementTree as ET
 import re
-
-def sanitize_filename(filename):
-    return re.sub(r'[\\/*?:"<>|]', '_', filename)
-
-feed_uri = sys.argv[1]
-
-response = requests.get(feed_uri)
-root_node = ET.fromstring(response.content)
-
-download_dir = root_node.find(".//channel/title").text
-if not os.path.exists(download_dir):
-  os.mkdir(download_dir)
-
-def download_file(filename, url):
-  destination = f"./{download_dir}/{filename}"
-  if os.path.exists(destination):
-    return destination
-
-  response = requests.get(url, stream=True)
-  total_size = int(response.headers.get('content-length', 0))
-  downloaded = 0
-
-  with open(destination, 'wb') as f:
-    for chunk in response.iter_content(chunk_size=1024 * 1024):
-      if chunk:
-        f.write(chunk)
-        downloaded += len(chunk)
-        percent = int(100 * downloaded / total_size) if total_size > 0 else 0
-        sys.stdout.write(f"\r{percent}% downloaded ({downloaded/(1024*1024):.1f} MB / {total_size/(1024*1024):.1f} MB)")
-        sys.stdout.flush()
-
-  return destination
-
-def meta_atributes(item):
-  data = {}
-  pubDate = item.find("pubDate").text
-  released_date = datetime.strptime(pubDate, "%a, %d %b %Y %H:%M:%S %Z")
-  title = item.find("title").text.strip()
-
-  data["date"] = released_date
-  data["title"] = title
-  data["description"] = item.find("description").text
-  data["guid"] = item.find("guid").text
-
-  return data
+from datetime import datetime
+from pathlib import Path
+import xml.etree.ElementTree as ET
+from tqdm import tqdm
 
 
-items = root_node.findall(".//item")
-list.reverse(items)
+# Cache files
+CACHE_FILE = Path("feed.xml")
+META_FILE = Path("feed.metadata.json")
 
-n = 1
-for item in items:
-    id = item.find("guid").text
-    data = meta_atributes(item)
-    data["number"] = n
-    url = item.find("enclosure").attrib["url"]
-    ext = url.split(".")[-1]
+# Limit of parallel downloads
+MAX_CONCURRENT_DOWNLOADS = 3
 
-    raw_filename = f"{data['date'].strftime('%F')} {n:03d} - {data['title']}.{ext}"
-    filename = sanitize_filename(raw_filename)
 
-    file = download_file(filename, url)
+def sanitize_filename(filename: str) -> str:
+    return re.sub(r'[\\/*?:"<>|]', "_", filename)
 
-    n += 1
+
+def load_meta():
+    if META_FILE.exists():
+        try:
+            return json.loads(META_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def save_meta(meta: dict):
+    META_FILE.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+async def fetch_rss_with_cache_validation(url: str) -> str:
+    """
+    Fetch RSS feed using ETag / Last-Modified validation.
+    Returns cached version if server responds 304 Not Modified.
+    """
+
+    headers = {}
+    meta = load_meta()
+
+    if "etag" in meta:
+        headers["If-None-Match"] = meta["etag"]
+    if "last_modified" in meta:
+        headers["If-Modified-Since"] = meta["last_modified"]
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+
+            if resp.status == 304:
+                print("RSS not modified → using cached feed.xml")
+                return CACHE_FILE.read_text(encoding="utf-8")
+
+            resp.raise_for_status()
+            text = await resp.text()
+
+            # Save feed
+            CACHE_FILE.write_text(text, encoding="utf-8")
+            print("RSS updated → feed.xml")
+
+            # Save metadata
+            new_meta = {}
+            if "ETag" in resp.headers:
+                new_meta["etag"] = resp.headers["ETag"]
+            if "Last-Modified" in resp.headers:
+                new_meta["last_modified"] = resp.headers["Last-Modified"]
+
+            save_meta(new_meta)
+            print("Metadata saved → feed.metadata.json")
+
+            return text
+
+
+async def download_file(session, url: str, target_path: Path):
+    """Download a file asynchronously with tqdm progress bar."""
+
+    if target_path.exists():
+        print(f"[SKIP] {target_path.name}")
+        return target_path
+
+    async with session.get(url) as resp:
+        resp.raise_for_status()
+
+        total_size = int(resp.headers.get("content-length", 0))
+
+        # tqdm progress bar
+        progress = tqdm(
+            total=total_size,
+            unit="B",
+            unit_scale=True,
+            desc=target_path.name,
+            leave=True,
+        )
+
+        with target_path.open("wb") as f:
+            async for chunk in resp.content.iter_chunked(1024 * 1024):
+                f.write(chunk)
+                progress.update(len(chunk))
+
+        progress.close()
+
+    return target_path
+
+
+async def limited_download(semaphore, session, url, target_path):
+    """Ensure only MAX_CONCURRENT_DOWNLOADS run at once."""
+    async with semaphore:
+        return await download_file(session, url, target_path)
+
+
+def parse_item_metadata(item):
+    pub_date = item.findtext("pubDate")
+    released_date = datetime.strptime(pub_date, "%a, %d %b %Y %H:%M:%S %Z")
+
+    return {
+        "date": released_date,
+        "title": item.findtext("title", "").strip(),
+        "description": item.findtext("description", ""),
+        "guid": item.findtext("guid", ""),
+    }
+
+
+async def main():
+    if len(sys.argv) < 2:
+        print("Usage: herohero-downloader.py <rss_feed_url>")
+        sys.exit(1)
+
+    feed_url = sys.argv[1]
+
+    # Load or update RSS feed
+    rss_xml = await fetch_rss_with_cache_validation(feed_url)
+
+    root = ET.fromstring(rss_xml)
+
+    title = root.findtext(".//channel/title")
+    download_dir = Path(sanitize_filename(title))
+    download_dir.mkdir(exist_ok=True)
+
+    items = root.findall(".//item")
+    items.reverse()  # earliest first
+
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+
+    async with aiohttp.ClientSession() as session:
+        tasks = []
+        for idx, item in enumerate(items, start=1):
+            meta = parse_item_metadata(item)
+
+            enclosure = item.find("enclosure")
+            url = enclosure.attrib["url"]
+            ext = url.split(".")[-1]
+
+            raw = f"{meta['date'].strftime('%F')} {idx:03d} - {meta['title']}.{ext}"
+            filename = sanitize_filename(raw)
+            target = download_dir / filename
+
+            tasks.append(limited_download(semaphore, session, url, target))
+
+        await asyncio.gather(*tasks)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
