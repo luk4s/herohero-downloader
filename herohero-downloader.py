@@ -32,7 +32,7 @@ try:
     MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
 except ValueError:
     MAX_CONCURRENT_DOWNLOADS = 3
-    print("Warning: Invalid MAX_CONCURRENT_DOWNLOADS value, using default: 3", file=sys.stderr)
+    print("Warning: MAX_CONCURRENT_DOWNLOADS must be a valid integer, using default: 3", file=sys.stderr)
 
 
 def sanitize_filename(filename: str) -> str:
