@@ -1,15 +1,24 @@
 # herohero-downloader
-I want play my favorite podcast more comfortably. So this script can download content from herohero.co via feed link.
+Download podcast content from herohero.co via RSS feed link.
 
 ## Usage
-As a subscriber of herohero.co generate feed link.
-Then use URL of feed as an argument of script:
+
+### Docker (Recommended)
 ```bash
-./herohero-downloader.py https://herohero.co/services/functions/rss-feed?token=blabla
+docker run -v $(pwd)/downloads:/app/downloads ghcr.io/luk4s/herohero-downloader:latest "https://herohero.co/services/functions/rss-feed?token=YOUR_TOKEN"
 ```
 
-Script download XML feed, based on title of user show create folder in folder you run it and download it...
-As a `filename` is used first line of description (until .) with #N of post and date of published.
+### Local Python
+```bash
+pip install -r requirements.txt
+./herohero-downloader.py "https://herohero.co/services/functions/rss-feed?token=YOUR_TOKEN"
+```
 
-If same filename already exist, skip this post = so if you set cronjob, you can easily download every new "episode".
+## Environment Variables
 
+- `MAX_CONCURRENT_DOWNLOADS` - Controls how many parallel download streams are allowed (default: 3)
+
+## How it works
+- Downloads XML feed and creates folder based on show title
+- Uses first line of description + post number + date as filename
+- Skips existing files (safe for cronjobs)
