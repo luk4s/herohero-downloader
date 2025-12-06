@@ -4,7 +4,7 @@ Usage:
     herohero-downloader.py <rss_feed_url>
 
 Requirements:
-    pip install aiohttp tqdm requests
+    pip install aiohttp tqdm
 """
 
 import aiohttp
@@ -28,9 +28,11 @@ META_FILE = Path("feed.metadata.json")
 ROOT_DOWNLOAD_FOLDER = "downloads"
 
 # Limit of parallel downloads
-
-# Limit of parallel downloads
-MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
+try:
+    MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
+except ValueError:
+    MAX_CONCURRENT_DOWNLOADS = 3
+    print("Warning: Invalid MAX_CONCURRENT_DOWNLOADS value, using default: 3", file=sys.stderr)
 
 
 def sanitize_filename(filename: str) -> str:
