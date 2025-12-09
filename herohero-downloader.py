@@ -4,26 +4,35 @@ Usage:
     herohero-downloader.py <rss_feed_url>
 
 Requirements:
-    pip install aiohttp tqdm requests
+    pip install aiohttp tqdm
 """
 
-import asyncio
 import aiohttp
+import asyncio
 import json
-import sys
+import os
 import re
+import sys
+
 from datetime import datetime
 from pathlib import Path
-import xml.etree.ElementTree as ET
 from tqdm import tqdm
+import xml.etree.ElementTree as ET
 
 
 # Cache files
 CACHE_FILE = Path("feed.xml")
 META_FILE = Path("feed.metadata.json")
 
+# Place to save downloads
+ROOT_DOWNLOAD_FOLDER = "downloads"
+
 # Limit of parallel downloads
-MAX_CONCURRENT_DOWNLOADS = 3
+try:
+    MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "3"))
+except ValueError:
+    MAX_CONCURRENT_DOWNLOADS = 3
+    print("Warning: MAX_CONCURRENT_DOWNLOADS must be a valid integer, using default: 3", file=sys.stderr)
 
 
 def sanitize_filename(filename: str) -> str:
@@ -146,8 +155,8 @@ async def main():
     root = ET.fromstring(rss_xml)
 
     title = root.findtext(".//channel/title")
-    download_dir = Path(sanitize_filename(title))
-    download_dir.mkdir(exist_ok=True)
+    download_dir = Path(ROOT_DOWNLOAD_FOLDER) / sanitize_filename(title)
+    download_dir.mkdir(exist_ok=True, parents=True)
 
     items = root.findall(".//item")
     items.reverse()  # earliest first
