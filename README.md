@@ -17,6 +17,9 @@ pip install -r requirements.txt
 ## Environment Variables
 
 - `MAX_CONCURRENT_DOWNLOADS` - Controls how many parallel download streams are allowed (default: 3)
+  ```bash
+  docker run -e MAX_CONCURRENT_DOWNLOADS=5 -v $(pwd)/downloads:/app/downloads ghcr.io/luk4s/herohero-downloader:latest "https://herohero.co/services/functions/rss-feed?token=YOUR_TOKEN"
+  ```
 
 ## How it works
 - Downloads XML feed and creates folder based on show title
